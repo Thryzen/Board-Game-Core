@@ -36,6 +36,8 @@ Responsibilities:
 - Create WebRTC peer connections.
 - Open ordered DataChannels.
 - Send and receive Core envelopes.
+- Load and normalize optional social catalogs.
+- Send and receive P2P social messages.
 - Emit browser events for games to handle.
 - Request and receive snapshots.
 
@@ -53,6 +55,32 @@ Responsibilities:
 - Track sequence numbers and duplicate inbound messages.
 
 Games should not bypass this envelope.
+
+### `client/social-catalog.mjs`
+
+Social catalog normalization helpers.
+
+Responsibilities:
+
+- Register one or more game-provided social catalog JSON files.
+- Resolve relative asset paths against each catalog URL.
+- Create deterministic resource keys such as `catalogId:reaction:tomato`.
+- Filter invalid resources before games show them to players.
+- Record diagnostics for conflicting catalogs or resources.
+
+Core does not ship assets or decide how resources are rendered.
+
+### `client/social-protocol.mjs`
+
+Social message payload helpers.
+
+Responsibilities:
+
+- Create chat, emoji, phrase, and reaction payloads.
+- Preserve catalog identity in social messages.
+- Normalize targeted reaction peer IDs.
+
+Messages still travel inside the normal P2P Core envelope.
 
 ## Server
 

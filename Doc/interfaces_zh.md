@@ -293,6 +293,15 @@ await core.createRoom({ displayName, maxPeers });
 await core.joinRoom({ roomCode, displayName });
 await core.resumeRoom({ roomCode, peerId, sessionToken });
 core.setSnapshotProvider(() => snapshot);
+await core.loadSocialCatalogs(socialCatalogUrls);
+core.registerSocialCatalog(catalogJson, { baseUrl });
+core.getSocialResources(filter);
+core.getSocialCatalogDiagnostics();
+core.sendChat(text, options);
+core.sendPhrase(resourceOrKey, options);
+core.sendEmoji(resourceOrKey, options);
+core.sendReaction(resourceOrKey, options);
+core.sendSocialMessage(kind, payload, options);
 core.sendGameAction(action);
 core.sendGameMessage(type, payload, to);
 core.requestSnapshot(peerId);
@@ -349,6 +358,106 @@ game-snapshot
 
 游戏可以扩展自己的 `type`，但必须保留这个信封结构。
 
+## 社交协议
+
+社交功能是可选能力，和游戏消息一样走 P2P DataChannel。Core 服务端不转发聊天、表情、文字片段、互动，也不托管社交素材。
+
+游戏通常在自己的公开前端配置里声明社交 catalog 路径：
+
+```json
+{
+  "online": {
+    "signalingUrl": "wss://core.example.com/ws",
+    "coreClientModuleUrl": "./vendor/board-games-core/board-games-core.mjs",
+    "socialCatalogUrls": [
+      "./social/common-party-pack/catalog.json",
+      "./social/chess-theme/catalog.json"
+    ]
+  }
+}
+```
+
+渲染社交 UI 前加载 catalog：
+
+```js
+await core.loadSocialCatalogs(gameConfig.online.socialCatalogUrls);
+const emojis = core.getSocialResources({ kind: "emoji" });
+const reactions = core.getSocialResources({ kind: "reaction" });
+const phrases = core.getSocialResources({ kind: "phrase" });
+```
+
+游戏应该用 `getSocialResources()` 返回的资源来渲染按钮和菜单，不要直接展示原始 catalog JSON。非法 catalog 项会在进入 UI 前被过滤。
+
+### 社交 Catalog 格式
+
+一份 catalog 是一个 JSON 文件加上它引用的 assets：
+
+```json
+{
+  "catalogVersion": 1,
+  "catalogId": "common-party-pack",
+  "label": "Common Party Pack",
+  "emojis": [
+    { "id": "smile", "label": "Smile", "asset": "./emoji/smile.webp", "alt": "smile" }
+  ],
+  "reactions": [
+    { "id": "tomato", "label": "Tomato", "asset": "./reaction/tomato.webp", "targeting": "peer" }
+  ],
+  "phrases": [
+    { "id": "good-game", "label": "Good game", "text": "Good game!" }
+  ]
+}
+```
+
+catalog 必填字段是 `catalogVersion`、`catalogId` 和 `label`。资源 ID 在 catalog 内稳定。视觉资源使用 `asset`，文字片段使用 `text`。相对 `asset` 路径会按 catalog JSON 的 URL 解析。
+
+解析后的资源有稳定 key：
+
+```text
+common-party-pack:emoji:smile
+common-party-pack:reaction:tomato
+common-party-pack:phrase:good-game
+```
+
+不同 catalog 可以复用同一个资源 ID，因为 `catalogId` 会作为命名空间。如果同一个 `catalogId` 定义了互相冲突的资源，冲突项会被拒绝，只出现在 `getSocialCatalogDiagnostics()` 里。
+
+### 发送社交消息
+
+```js
+core.sendChat("hello");
+core.sendPhrase("common-party-pack:phrase:good-game");
+core.sendEmoji("common-party-pack:emoji:smile");
+core.sendReaction("common-party-pack:reaction:tomato", { targetPeerId: "peer-2" });
+core.sendReaction("common-party-pack:reaction:rose", { targetPeerIds: ["peer-2", "peer-3"] });
+```
+
+这些方法会通过 DataChannel 发送 `type: "social-message"` 的 Core 信封。聊天默认广播。定向互动只发送给选中的一个或多个 peer。
+
+互动 payload 示例：
+
+```json
+{
+  "kind": "reaction",
+  "catalogId": "common-party-pack",
+  "reactionId": "tomato",
+  "resourceKey": "common-party-pack:reaction:tomato",
+  "targetPeerIds": ["peer-2"],
+  "clientMessageId": "msg_local_125",
+  "createdAt": 1780000000000
+}
+```
+
+Core 只保留社交语义和 catalog 身份。番茄、鸡蛋、玫瑰或其他互动如何显示和播放动画，由游戏自己决定。
+
+### 接收社交消息
+
+```js
+core.addEventListener("social-message", (event) => {
+  const { envelope, message, resource } = event.detail;
+});
+```
+
+如果本地有对应 catalog 资源，`resource` 就是解析后的资源；否则是 `null`。游戏可以显示降级文本、忽略消息，或渲染自己的缺失资源提示。
 ## 低负载规则
 
 为了保持服务端轻量：

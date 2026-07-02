@@ -88,7 +88,10 @@ The game owns its public browser config:
 {
   "online": {
     "signalingUrl": "wss://core.example.com/ws",
-    "coreClientModuleUrl": "./vendor/board-games-core/board-games-core.mjs"
+    "coreClientModuleUrl": "./vendor/board-games-core/board-games-core.mjs",
+    "socialCatalogUrls": [
+      "./social/common-party-pack/catalog.json"
+    ]
   }
 }
 ```
@@ -282,6 +285,64 @@ These are integration rules, not suggestions:
 
 If P2P fails, show a connection error. Add TURN or a controlled relay later; do not quietly push all game traffic through signaling.
 
+## Optional: Add Chat, Emoji, Phrases, and Reactions
+
+Social features are still game-owned UI. Core gives you a shared protocol and a catalog resolver so multiple games can use the same resource packs.
+
+A social catalog is one JSON file plus referenced assets:
+
+```json
+{
+  "catalogVersion": 1,
+  "catalogId": "common-party-pack",
+  "label": "Common Party Pack",
+  "emojis": [
+    { "id": "smile", "label": "Smile", "asset": "./emoji/smile.webp" }
+  ],
+  "reactions": [
+    { "id": "tomato", "label": "Tomato", "asset": "./reaction/tomato.webp", "targeting": "peer" }
+  ],
+  "phrases": [
+    { "id": "good-game", "label": "Good game", "text": "Good game!" }
+  ]
+}
+```
+
+Load the catalogs after creating the Core client:
+
+```js
+await core.loadSocialCatalogs(gameConfig.online.socialCatalogUrls ?? []);
+
+const socialResources = core.getSocialResources();
+const emojiButtons = core.getSocialResources({ kind: "emoji" });
+const reactionButtons = core.getSocialResources({ kind: "reaction" });
+const phraseButtons = core.getSocialResources({ kind: "phrase" });
+```
+
+Render social UI from these resolved resources. Each item has a stable `key`, `label`, optional `assetUrl`, and catalog identity. Invalid resources and conflicting definitions are omitted before players can click them.
+
+Send messages from UI actions:
+
+```js
+core.sendChat(chatInput.value);
+core.sendPhrase(phraseResource);
+core.sendEmoji(emojiResource);
+core.sendReaction(reactionResource, { targetPeerId: opponentPeerId });
+```
+
+Receive and render social messages:
+
+```js
+core.addEventListener("social-message", (event) => {
+  const { message, resource, envelope } = event.detail;
+
+  if (message.kind === "chat") showChatBubble(envelope.senderId, message.text);
+  if (message.kind === "emoji" && resource) showEmoji(envelope.senderId, resource.assetUrl);
+  if (message.kind === "reaction" && resource) playReaction(resource, message.targetPeerIds);
+});
+```
+
+Do not put images, animations, or repeated animation state into Core messages. Send the stable resource identity and let each game render the effect locally.
 ## Minimal Adapter Shape
 
 ```js

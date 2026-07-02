@@ -36,6 +36,8 @@ Core 信令服务运行配置。
 - 创建 WebRTC peer connection。
 - 打开有序 DataChannel。
 - 发送和接收 Core 信封消息。
+- 加载和归一化可选社交 catalog。
+- 发送和接收 P2P 社交消息。
 - 向游戏抛出浏览器事件。
 - 请求和接收快照。
 
@@ -53,6 +55,32 @@ P2P 消息信封工具。
 - 维护序号，并过滤重复入站消息。
 
 游戏不应该绕过这个信封。
+
+### `client/social-catalog.mjs`
+
+社交 catalog 归一化工具。
+
+职责：
+
+- 注册一份或多份游戏提供的社交 catalog JSON。
+- 按 catalog URL 解析相对 asset 路径。
+- 创建稳定资源 key，例如 `catalogId:reaction:tomato`。
+- 在游戏展示给玩家前过滤非法资源。
+- 记录 catalog 或资源冲突的诊断信息。
+
+Core 不内置素材，也不决定资源怎么渲染。
+
+### `client/social-protocol.mjs`
+
+社交消息 payload 工具。
+
+职责：
+
+- 创建聊天、表情、文字片段和互动 payload。
+- 在社交消息中保留 catalog 身份。
+- 归一化定向互动的 peerId。
+
+消息仍然放在普通 P2P Core 信封里传输。
 
 ## Server
 

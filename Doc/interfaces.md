@@ -293,6 +293,15 @@ await core.createRoom({ displayName, maxPeers });
 await core.joinRoom({ roomCode, displayName });
 await core.resumeRoom({ roomCode, peerId, sessionToken });
 core.setSnapshotProvider(() => snapshot);
+await core.loadSocialCatalogs(socialCatalogUrls);
+core.registerSocialCatalog(catalogJson, { baseUrl });
+core.getSocialResources(filter);
+core.getSocialCatalogDiagnostics();
+core.sendChat(text, options);
+core.sendPhrase(resourceOrKey, options);
+core.sendEmoji(resourceOrKey, options);
+core.sendReaction(resourceOrKey, options);
+core.sendSocialMessage(kind, payload, options);
 core.sendGameAction(action);
 core.sendGameMessage(type, payload, to);
 core.requestSnapshot(peerId);
@@ -349,6 +358,106 @@ game-snapshot
 
 Games may define additional `type` values but must keep the envelope.
 
+## Social Protocol
+
+Social features are optional and use the same P2P DataChannel path as game messages. The Core server does not relay chat, emoji, phrases, reactions, or social assets.
+
+Games usually declare social catalog URLs in their own public browser config:
+
+```json
+{
+  "online": {
+    "signalingUrl": "wss://core.example.com/ws",
+    "coreClientModuleUrl": "./vendor/board-games-core/board-games-core.mjs",
+    "socialCatalogUrls": [
+      "./social/common-party-pack/catalog.json",
+      "./social/chess-theme/catalog.json"
+    ]
+  }
+}
+```
+
+Load catalogs before rendering social UI:
+
+```js
+await core.loadSocialCatalogs(gameConfig.online.socialCatalogUrls);
+const emojis = core.getSocialResources({ kind: "emoji" });
+const reactions = core.getSocialResources({ kind: "reaction" });
+const phrases = core.getSocialResources({ kind: "phrase" });
+```
+
+Games should render buttons and menus from `getSocialResources()`, not from raw catalog JSON. Invalid catalog entries are filtered before they reach the UI.
+
+### Social Catalog Format
+
+A catalog is one JSON file plus the assets it references:
+
+```json
+{
+  "catalogVersion": 1,
+  "catalogId": "common-party-pack",
+  "label": "Common Party Pack",
+  "emojis": [
+    { "id": "smile", "label": "Smile", "asset": "./emoji/smile.webp", "alt": "smile" }
+  ],
+  "reactions": [
+    { "id": "tomato", "label": "Tomato", "asset": "./reaction/tomato.webp", "targeting": "peer" }
+  ],
+  "phrases": [
+    { "id": "good-game", "label": "Good game", "text": "Good game!" }
+  ]
+}
+```
+
+Required catalog fields are `catalogVersion`, `catalogId`, and `label`. Resource IDs are stable inside a catalog. Visual resources use `asset`; phrase resources use `text`. Relative `asset` paths are resolved against the catalog JSON URL.
+
+Resolved resources have stable keys:
+
+```text
+common-party-pack:emoji:smile
+common-party-pack:reaction:tomato
+common-party-pack:phrase:good-game
+```
+
+Different catalogs may reuse the same resource ID because `catalogId` namespaces the key. If the same `catalogId` defines conflicting resources, the conflicting entries are rejected and appear only in `getSocialCatalogDiagnostics()`.
+
+### Sending Social Messages
+
+```js
+core.sendChat("hello");
+core.sendPhrase("common-party-pack:phrase:good-game");
+core.sendEmoji("common-party-pack:emoji:smile");
+core.sendReaction("common-party-pack:reaction:tomato", { targetPeerId: "peer-2" });
+core.sendReaction("common-party-pack:reaction:rose", { targetPeerIds: ["peer-2", "peer-3"] });
+```
+
+These methods send a Core envelope with `type: "social-message"` over DataChannel. Chat broadcasts by default. Targeted reactions are sent only to the selected peer or peers.
+
+Example reaction payload:
+
+```json
+{
+  "kind": "reaction",
+  "catalogId": "common-party-pack",
+  "reactionId": "tomato",
+  "resourceKey": "common-party-pack:reaction:tomato",
+  "targetPeerIds": ["peer-2"],
+  "clientMessageId": "msg_local_125",
+  "createdAt": 1780000000000
+}
+```
+
+Core only preserves the social meaning and catalog identity. The game decides how tomato, egg, rose, or any other reaction looks and animates.
+
+### Receiving Social Messages
+
+```js
+core.addEventListener("social-message", (event) => {
+  const { envelope, message, resource } = event.detail;
+});
+```
+
+`resource` is the local resolved catalog resource when available, otherwise `null`. Games may show a fallback, ignore the message, or render their own missing-resource UI.
 ## Load Rules
 
 To keep the server thin:

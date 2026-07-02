@@ -1,4 +1,11 @@
 import { MessageTracker } from "./protocol.mjs";
+import { SocialCatalogRegistry } from "./social-catalog.mjs";
+import {
+  createChatPayload,
+  createEmojiPayload,
+  createPhrasePayload,
+  createReactionPayload,
+} from "./social-protocol.mjs";
 
 const DEFAULT_ICE_SERVERS = [{ urls: "stun:stun.l.google.com:19302" }];
 
@@ -33,6 +40,7 @@ export class BoardGamesCoreClient extends EventTarget {
     iceServers = DEFAULT_ICE_SERVERS,
     webSocketFactory = (url) => new WebSocket(url),
     peerConnectionFactory = (config) => new RTCPeerConnection(config),
+    fetchFactory = (...args) => fetch(...args),
   }) {
     super();
     if (!signalingUrl) throw new Error("signalingUrl is required");
@@ -43,6 +51,7 @@ export class BoardGamesCoreClient extends EventTarget {
     this.iceServers = iceServers;
     this.webSocketFactory = webSocketFactory;
     this.peerConnectionFactory = peerConnectionFactory;
+    this.fetchFactory = fetchFactory;
     this.socket = null;
     this.room = null;
     this.peerId = null;
@@ -50,6 +59,7 @@ export class BoardGamesCoreClient extends EventTarget {
     this.tracker = null;
     this.peers = new Map();
     this.snapshotProvider = null;
+    this.socialCatalogs = new SocialCatalogRegistry();
     this.heartbeatTimer = null;
   }
 
@@ -85,11 +95,53 @@ export class BoardGamesCoreClient extends EventTarget {
     this.snapshotProvider = provider;
   }
 
+  async loadSocialCatalogs(urls = []) {
+    if (!Array.isArray(urls)) throw new Error("social catalog urls must be an array");
+    const accepted = [];
+    for (const url of urls) {
+      try {
+        const response = await this.fetchFactory(url);
+        if (!response?.ok) {
+          this.socialCatalogs.addDiagnostic("error", "catalog-load-failed", "could not load social catalog", {
+            url,
+            status: response?.status,
+          });
+          continue;
+        }
+        const catalog = await response.json();
+        accepted.push(...this.registerSocialCatalog(catalog, { baseUrl: response.url ?? url, sourceUrl: url }));
+      } catch (error) {
+        this.socialCatalogs.addDiagnostic("error", "catalog-load-failed", "could not load social catalog", {
+          url,
+          message: error?.message ?? String(error),
+        });
+      }
+    }
+    return accepted;
+  }
+
+  registerSocialCatalog(catalog, options = {}) {
+    return this.socialCatalogs.register(catalog, options);
+  }
+
+  getSocialResources(filter = {}) {
+    return this.socialCatalogs.resources(filter);
+  }
+
+  getSocialCatalogDiagnostics() {
+    return this.socialCatalogs.diagnostics();
+  }
+
   sendGameMessage(type, payload = null, to = "all") {
     if (!this.tracker) throw new Error("client is not in a room");
     const envelope = this.tracker.next(type, payload, to);
     if (to === "all") {
       for (const peer of this.peers.values()) this.sendEnvelopeToPeer(peer, envelope);
+    } else if (Array.isArray(to)) {
+      for (const peerId of to) {
+        const peer = this.peers.get(peerId);
+        if (peer) this.sendEnvelopeToPeer(peer, envelope);
+      }
     } else {
       const peer = this.peers.get(to);
       if (peer) this.sendEnvelopeToPeer(peer, envelope);
@@ -99,6 +151,39 @@ export class BoardGamesCoreClient extends EventTarget {
 
   sendGameAction(action) {
     return this.sendGameMessage("game-action", { action });
+  }
+
+  sendSocialMessage(kind, payload, options = {}) {
+    if (!["chat", "emoji", "reaction"].includes(kind)) throw new Error("valid social message kind is required");
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw new Error("social message payload is required");
+    }
+    if (payload.kind !== kind) throw new Error("social message payload kind does not match");
+    return this.sendGameMessage("social-message", payload, socialTo(options));
+  }
+
+  sendChat(text, options = {}) {
+    const payload = createChatPayload(text, options);
+    return this.sendSocialMessage("chat", payload, options);
+  }
+
+  sendPhrase(resourceOrKey, options = {}) {
+    const resource = this.resolveSocialResource(resourceOrKey, "phrase");
+    const payload = createPhrasePayload(resource, options);
+    return this.sendSocialMessage("chat", payload, options);
+  }
+
+  sendEmoji(resourceOrKey, options = {}) {
+    const resource = this.resolveSocialResource(resourceOrKey, "emoji");
+    const payload = createEmojiPayload(resource, options);
+    return this.sendSocialMessage("emoji", payload, options);
+  }
+
+  sendReaction(resourceOrKey, options = {}) {
+    const resource = this.resolveSocialResource(resourceOrKey, "reaction");
+    const payload = createReactionPayload(resource, options);
+    const to = payload.targetPeerIds?.length ? socialTo({ targetPeerIds: payload.targetPeerIds }) : socialTo(options);
+    return this.sendSocialMessage("reaction", payload, { ...options, to });
   }
 
   requestSnapshot(peerId = this.room?.hostId) {
@@ -340,6 +425,47 @@ export class BoardGamesCoreClient extends EventTarget {
       return;
     }
 
+    if (envelope.type === "social-message") {
+      const message = envelope.payload;
+      dispatch(this, "social-message", {
+        peerId: peer.id,
+        envelope,
+        message,
+        resource: this.resolveSocialMessageResource(message),
+      });
+      return;
+    }
+
     dispatch(this, "game-message", { peerId: peer.id, envelope });
   }
+
+  resolveSocialResource(resourceOrKey, kind) {
+    const resource = typeof resourceOrKey === "string" ? this.socialCatalogs.get(resourceOrKey) : resourceOrKey;
+    if (!resource) throw new Error("unknown social resource");
+    if (resource.kind !== kind) throw new Error(`social resource must be ${kind}`);
+    return resource;
+  }
+
+  resolveSocialMessageResource(message) {
+    if (!message || typeof message !== "object" || !message.resourceKey) return null;
+    return this.socialCatalogs.get(message.resourceKey);
+  }
+}
+
+function socialTo(options = {}) {
+  if (options.to != null) return options.to;
+  if (options.targetPeerId != null && options.targetPeerIds != null) {
+    throw new Error("use targetPeerId or targetPeerIds, not both");
+  }
+  if (options.targetPeerIds != null) return normalizePeerIds(options.targetPeerIds);
+  if (options.targetPeerId != null) return options.targetPeerId;
+  return "all";
+}
+
+function normalizePeerIds(peerIds) {
+  if (!Array.isArray(peerIds) || peerIds.some((peerId) => typeof peerId !== "string" || peerId.trim().length === 0)) {
+    throw new Error("targetPeerIds must be non-empty strings");
+  }
+  if (peerIds.length === 1) return peerIds[0];
+  return peerIds;
 }

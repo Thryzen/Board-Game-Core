@@ -12,6 +12,7 @@ The Core does not know chess, cards, dice, victory rules, legal moves, scoring, 
 - Thin signaling servers with low CPU and bandwidth pressure.
 - P2P-first game traffic through ordered DataChannels.
 - Reusable browser SDK for game clients.
+- Optional P2P social chat, emoji, phrase, and reaction protocol.
 - Disconnect detection, host migration, and empty-room cleanup.
 - A fixed message envelope that keeps integrations consistent.
 

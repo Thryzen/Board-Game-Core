@@ -88,7 +88,10 @@ const nextState = applyAction(currentState, action);
 {
   "online": {
     "signalingUrl": "wss://core.example.com/ws",
-    "coreClientModuleUrl": "./vendor/board-games-core/board-games-core.mjs"
+    "coreClientModuleUrl": "./vendor/board-games-core/board-games-core.mjs",
+    "socialCatalogUrls": [
+      "./social/common-party-pack/catalog.json"
+    ]
   }
 }
 ```
@@ -284,6 +287,64 @@ Core 支持这些策略的传输基础，具体选择由游戏决定。
 
 如果 P2P 失败，应该显示连接错误。后续可以加 TURN 或受控 relay，但不要悄悄把所有游戏流量塞进信令服务器。
 
+## 可选：添加聊天、表情、文字片段和互动
+
+社交功能仍然属于游戏自己的 UI。Core 提供共享协议和 catalog 解析器，让多个游戏可以使用同一套资源包。
+
+一份 social catalog 是一个 JSON 文件加引用的 assets：
+
+```json
+{
+  "catalogVersion": 1,
+  "catalogId": "common-party-pack",
+  "label": "Common Party Pack",
+  "emojis": [
+    { "id": "smile", "label": "Smile", "asset": "./emoji/smile.webp" }
+  ],
+  "reactions": [
+    { "id": "tomato", "label": "Tomato", "asset": "./reaction/tomato.webp", "targeting": "peer" }
+  ],
+  "phrases": [
+    { "id": "good-game", "label": "Good game", "text": "Good game!" }
+  ]
+}
+```
+
+创建 Core client 后加载 catalog：
+
+```js
+await core.loadSocialCatalogs(gameConfig.online.socialCatalogUrls ?? []);
+
+const socialResources = core.getSocialResources();
+const emojiButtons = core.getSocialResources({ kind: "emoji" });
+const reactionButtons = core.getSocialResources({ kind: "reaction" });
+const phraseButtons = core.getSocialResources({ kind: "phrase" });
+```
+
+用这些解析后的资源渲染社交 UI。每个资源都有稳定 `key`、`label`、可选 `assetUrl` 和 catalog 身份。非法资源和冲突定义会在玩家点击之前被过滤掉。
+
+根据 UI 操作发送消息：
+
+```js
+core.sendChat(chatInput.value);
+core.sendPhrase(phraseResource);
+core.sendEmoji(emojiResource);
+core.sendReaction(reactionResource, { targetPeerId: opponentPeerId });
+```
+
+接收并渲染社交消息：
+
+```js
+core.addEventListener("social-message", (event) => {
+  const { message, resource, envelope } = event.detail;
+
+  if (message.kind === "chat") showChatBubble(envelope.senderId, message.text);
+  if (message.kind === "emoji" && resource) showEmoji(envelope.senderId, resource.assetUrl);
+  if (message.kind === "reaction" && resource) playReaction(resource, message.targetPeerIds);
+});
+```
+
+不要把图片、动画或高频动画状态放进 Core 消息。消息只发送稳定资源身份，由每个游戏在本地渲染效果。
 ## 最小适配层形状
 
 ```js
