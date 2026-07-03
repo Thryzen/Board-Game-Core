@@ -214,3 +214,74 @@ core.setSnapshotProvider(() => ({
 - 只能原玩家恢复的座位。
 
 保留 Core 传输模式，但写自己的座位策略。
+
+## 增加 Catalog 快捷语和表情
+
+游戏配置增加了一组静态 social catalog 地址：
+
+```json
+{
+  "online": {
+    "signalingUrl": "wss://core.example.com/ws",
+    "coreClientModuleUrl": "./vendor/board-games-core/board-games-core.mjs",
+    "socialCatalogUrls": [
+      "./social/table-talk-starter-pack/catalog.json"
+    ]
+  }
+}
+```
+
+这些 catalog URL 指向由游戏站点、共享资源站点或 CDN 提供的静态文件。Core 信令服务器不提供 catalog JSON、图片、动画或其他社交素材。
+
+创建 Core client 后，游戏加载并解析 catalog：
+
+```js
+await core.loadSocialCatalogs(config.online.socialCatalogUrls ?? []);
+
+const phrases = core.getSocialResources({ kind: "phrase" });
+const emojis = core.getSocialResources({ kind: "emoji" });
+```
+
+游戏使用 Core 返回的已解析资源，而不是直接读取原始 catalog JSON。这样校验、资源 key、catalog 身份和相对 asset URL 解析都留在 Core 中完成。
+
+玩家发送 catalog 快捷语时：
+
+```js
+core.sendPhrase(phraseResource);
+```
+
+Core 会通过和游戏行动相同的 P2P DataChannel 路径发送 `social-message` 信封。快捷语会被表示为带 catalog 身份的 chat：payload 中有 `kind: "chat"`，并带有 `phraseId`、`resourceKey` 和 `text`。
+
+玩家发送表情时：
+
+```js
+core.sendEmoji(emojiResource);
+```
+
+Core 只发送稳定的 catalog 身份，例如：
+
+```text
+table-talk-starter-pack:emoji:dice-drama
+```
+
+图片本身不通过 Core 发送。每个 peer 都从自己已加载的 catalog 中解析同一个资源。
+
+接收社交消息使用 Core 的 social 事件：
+
+```js
+core.addEventListener("social-message", (event) => {
+  const { envelope, message, resource } = event.detail;
+
+  if (message.kind === "chat" && message.phraseId) {
+    applyIncomingPhrase(envelope.senderId, message.text, resource);
+  }
+
+  if (message.kind === "emoji" && resource) {
+    applyIncomingEmoji(envelope.senderId, resource);
+  }
+});
+```
+
+游戏自己决定如何呈现快捷语或表情。Core 只提供协议、catalog 解析器、资源身份和 P2P 传递。
+
+关键原则保持不变：社交消息不会把信令服务器变成聊天服务器。Catalog 文件和素材是静态资源，快捷语或表情消息会在房间 DataChannel 就绪后走 P2P。

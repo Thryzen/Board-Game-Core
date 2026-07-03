@@ -214,3 +214,74 @@ Do not copy the two-seat policy if your game has:
 - Rejoin-only seats.
 
 Keep the Core transport pattern, but write your own seat policy.
+
+## Adding Catalog Phrases and Emojis
+
+The game config gained a static social catalog list:
+
+```json
+{
+  "online": {
+    "signalingUrl": "wss://core.example.com/ws",
+    "coreClientModuleUrl": "./vendor/board-games-core/board-games-core.mjs",
+    "socialCatalogUrls": [
+      "./social/table-talk-starter-pack/catalog.json"
+    ]
+  }
+}
+```
+
+These catalog URLs point to static files served by the game site, a shared asset host, or a CDN. The Core signaling server does not serve catalog JSON, images, animations, or other social assets.
+
+After creating the Core client, the game loads and resolves the catalogs:
+
+```js
+await core.loadSocialCatalogs(config.online.socialCatalogUrls ?? []);
+
+const phrases = core.getSocialResources({ kind: "phrase" });
+const emojis = core.getSocialResources({ kind: "emoji" });
+```
+
+The game uses the resolved resources returned by Core instead of reading raw catalog JSON directly. This keeps validation, resource keys, catalog identity, and relative asset URL resolution inside Core.
+
+When a player sends a catalog phrase:
+
+```js
+core.sendPhrase(phraseResource);
+```
+
+Core sends a `social-message` envelope over the same P2P DataChannel path used by game actions. A phrase is represented as catalog-backed chat: the payload has `kind: "chat"` plus `phraseId`, `resourceKey`, and `text`.
+
+When a player sends an emoji:
+
+```js
+core.sendEmoji(emojiResource);
+```
+
+Core sends only the stable catalog identity, such as:
+
+```text
+table-talk-starter-pack:emoji:dice-drama
+```
+
+The image itself is not sent through Core. Each peer resolves the same resource locally from its loaded catalogs.
+
+Receiving social messages uses Core's social event:
+
+```js
+core.addEventListener("social-message", (event) => {
+  const { envelope, message, resource } = event.detail;
+
+  if (message.kind === "chat" && message.phraseId) {
+    applyIncomingPhrase(envelope.senderId, message.text, resource);
+  }
+
+  if (message.kind === "emoji" && resource) {
+    applyIncomingEmoji(envelope.senderId, resource);
+  }
+});
+```
+
+The game chooses how to present the phrase or emoji. Core only provides the protocol, catalog resolver, resource identity, and P2P delivery.
+
+The important rule stayed the same: social messages do not turn the signaling server into a chat server. Catalog files and assets are static resources, and phrase or emoji messages travel peer-to-peer whenever the room's DataChannels are ready.
